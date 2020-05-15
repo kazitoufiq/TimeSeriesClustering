@@ -1,0 +1,256 @@
+---
+title: "Point Machine: Phase 1"
+author: "MTM"
+output:
+  html_document:
+    code_folding: hide
+---  
+#Model Compare Exercise
+
+```{r setup, message=F, warning=FALSE}
+knitr::opts_chunk$set(echo = T, warning = F)
+#libraries used
+library(easypackages)
+Packages <- c("fs", "tidyverse", "lubridate", "data.table", 
+              "xts", "TSclust", "cluster","kableExtra","factoextra", "DT" )
+
+suppressWarnings(libraries(Packages))
+
+```
+
+#### Raw Current Profile Data
+```{r swing current data, message=F }
+i=1
+PM_NameID <-  paste0(pm_list[i,4], "_", pm_list[i,5], "_", pm_list[i,1], "_", pm_list[i,2])
+PM_Name_file <-  paste0(selected_pm[i,4], "_", selected_pm[i,5], "_", 
+                        selected_pm[i,1], "_", selected_pm[i,2])
+c_data <- c_data_files %>% 
+            map_dfr(funcRead) %>% 
+            dplyr::rename(FieldUnitUID=X2, ChannelUID=X6, 
+                   SequenceNo=X4,  EventTime=X5, XML=X7) %>% 
+            as.data.frame() %>% select(-c(X1,X3, X8)) %>%
+            filter(FieldUnitUID==selected_pm[i,1]  &  ChannelUID==selected_pm[i,2])  %>%
+            mutate(EventTime= ymd_hms(EventTime))  %>%
+            arrange(EventTime) # %>% slice(1:2000)
+
+
+head(c_data) %>% kable(align = "l") %>%
+kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive", "bordered"), 
+              fixed_thead = T, position = "center") %>% 
+              scroll_box(width = "910px", height = "250px")
+```
+
+
+#### Transformed Current Profile Data
+```{r}
+# parsing using regex.
+c_data$increment <- gsub("\\D", "", str_extract(c_data$XML, "increment=\"[0-9]+\""))  
+c_data$length <-   gsub("\\D", "", str_extract(c_data$XML, "length=\"[0-9]+\"") )
+c_data$samples <- gsub("\\D", "", str_extract(c_data$XML, "samples=\"[0-9]+\""))  
+c_data$dir <-   gsub("dir=|\"", "" , str_extract(c_data$XML, "dir=\"[a-zA-Z]+\""))
+  
+  
+UDFunc__Header_Data_Check  <- function(x) {
+    
+    if( grepl("Current", x, ignore.case = T)  &  
+        grepl("Force|Hydraulic", x, ignore.case = T) &
+        str_locate(x, "Current")[[1]] < str_locate(x, "Force|Hydraulic")[[1]]) { 
+      
+      return("C-F")
+      
+    } else if (grepl("Current", x, ignore.case = T)  &  
+               grepl("Force|Hydraulic", x, ignore.case = T) &
+               str_locate(x, "Current")[[1]] > str_locate(x, "Force|Hydraulic")[[1]]) {
+      
+      return("F-C")
+      
+    } else  
+      
+      return("C")
+  }
+  
+c_data$DataCategory <- unlist(lapply(c_data$XML, UDFunc__Header_Data_Check))
+  
+c_data$DataValues <- gsub("<data>|</data>", "",str_extract(c_data$XML, "<data>[[:print:]]+</data>"))
+```
+
+```{r}
+suppressWarnings(library(plotly))
+
+ c_data %>% group_by(EventDate=round_date(c_data$EventTime, "day")) %>% 
+                     summarise(NoOfSwings=n()) %>% dplyr::ungroup() %>%
+                     plot_ly(x = ~EventDate, y = ~NoOfSwings,  
+                 type = 'bar', showlegend = T) %>%  layout(title = paste0("Swings Per Day | ", PM_NameID ))
+
+detach("package:plotly", unload = TRUE)
+```
+
+
+
+
+
+```{r}
+# also parsing other important info like increment, length, samples in order to accomodate varying data structure
+
+DT <- data.table(c_data) 
+
+parsed_data <-  DT[ , .(FieldUnitUID, ChannelUID, SequenceNo, EventTime, DataValues, increment, length,
+                          samples, dir, DataCategory, value=unlist(strsplit(DataValues, ",")) ), 
+                      by=seq_len(nrow(DT))] %>% mutate(RowSeq=row_number()) %>%
+                      dplyr::select(-DataValues) %>%
+                      arrange(RowSeq) %>% 
+                      mutate(DataSource="PCM", 
+                      SequenceNo=as.character(SequenceNo),
+                      value=as.numeric(value))
+```
+
+
+```{r}
+
+if(sum(parsed_data$DataCategory=="C-F")==length(parsed_data$DataCategory)) {
+    
+    final_parsed_data <-  parsed_data %>% group_by(FieldUnitUID,ChannelUID,SequenceNo) %>% 
+      mutate(Force_Value=lead(value)) %>%
+      filter(RowSeq %% 2 !=0) %>% 
+      dplyr::rename(Current_Value=value)
+    
+  } else if (sum(parsed_data$DataCategory=="F-C")==length(parsed_data$DataCategory)) {
+    
+    final_parsed_data <-  parsed_data %>% group_by(FieldUnitUID,ChannelUID,SequenceNo) %>% 
+      mutate(Current_Value=lead(value)) %>%
+      filter(RowSeq %% 2 !=0) %>% 
+      dplyr::rename(Force_Value=value) 
+    
+  } else if (sum(parsed_data$DataCategory=="C")==length(parsed_data$DataCategory)){
+    
+    final_parsed_data <-  parsed_data %>% 
+      dplyr::rename(Current_Value=value) %>% mutate(Force_Value=NA) 
+  } else{
+    
+    final_parsed_data <-  parsed_data %>% group_by(FieldUnitUID,ChannelUID,SequenceNo) %>% 
+      mutate(Force_Value=lead(value)) %>%
+      filter(RowSeq %% 2 !=0) %>% 
+      dplyr::rename(Current_Value=value) %>% mutate(Force_Value=NA) 
+    
+    
+  }
+  
+
+final_PCM_data <- final_parsed_data %>%  
+                 dplyr::select(FieldUnitUID, ChannelUID, SequenceNo, EventTime, increment, length, 
+                 samples, dir, DataCategory, RowSeq,
+                 Current_Value, Force_Value, DataSource ) %>%
+                 dplyr::rename(TimeInterval=increment, SwingDuration_ms=length, NoOfDataPoints=samples,
+                        Direction=dir) %>%
+                 arrange(RowSeq) %>%
+                 group_by(FieldUnitUID,ChannelUID,SequenceNo) %>%
+                 mutate(SeqTimeID=row_number()) %>% ungroup() %>%
+                 arrange(RowSeq, SeqTimeID)
+
+head(final_PCM_data) %>% kable(align = "l") %>%
+kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive", "bordered"), 
+              fixed_thead = T, position = "center") %>% 
+              scroll_box(width = "910px", height = "250px")
+
+#PM_NameID <-  paste0(pm_list[i,4], " | ", pm_list[i,5], " | ", pm_list[i,1], "-", pm_list[i,2])
+#PM_Name_file <-  paste0(pm_list[i,4], "_", pm_list[i,5], "_", pm_list[i,1], "_", pm_list[i,2])
+
+print(paste0("Selected Point Machine: ", PM_NameID ))
+print(paste0("No. of swings taken: ",length(unique(final_PCM_data$SequenceNo))))
+
+```
+
+
+```{r}
+
+seq_list <- unique(final_PCM_data$SequenceNo)
+
+seq_list_splited <- split(seq_list, ceiling(seq_along(seq_list)/2000))
+      
+j=5
+
+for(j in 1:length(seq_list_splited)){
+
+dd <-  final_PCM_data %>%  filter(SequenceNo %in% seq_list_splited[[j]]) %>%
+        dplyr::select(SequenceNo,Current_Value)
+
+dd_list <-  split(dd$Current_Value, dd$SequenceNo)
+
+
+library(dtwclust)
+
+pc_dtw <- tsclust(dd_list, k = 2L, distance = "sbd", centroid = "shape",
+ trace = TRUE, seed = 8, args = tsclust_args(cent = list(trace = TRUE)))
+
+
+SBD_PAM_df <- as.data.frame(pc_dtw@cluster)  %>% 
+             rownames_to_column(var = "RowID")
+ 
+dist_df_cluster <- as.data.frame(pc_dtw@cldist) %>%
+                rownames_to_column(var = "RowID")
+
+data_seq <-  stack(pc_dtw@datalist) %>% dplyr::select(ind) %>% 
+                       dplyr::distinct() %>%
+                       rownames_to_column(var = "RowID")
+
+seq_dist <- left_join(dist_df_cluster, data_seq, c("RowID")) 
+   
+full_data <-   left_join(SBD_PAM_df, seq_dist, c("RowID")) %>%
+               rename(SequenceNo=ind, clusterID=2, DistFromClusterCentroid=3) %>%  
+               select(-1) %>%
+               mutate(SequenceNo=as.character(SequenceNo), cluster_method="sbd_shape") %>%
+               left_join(final_PCM_data,by=c("SequenceNo")) %>%
+               mutate(Block=j)
+
+
+library(dbscan)  #outlier detection
+
+
+udf_func_dbscan <- function(df, shape_CID, eps_dis) {
+
+dbscan_mat <-  df  %>% 
+               dplyr::select(1,2,3) %>% dplyr::distinct() %>% 
+               filter(clusterID==shape_CID) %>% rownames_to_column(var = "RowID")
+
+dbscan_cluster  <-  dbscan(as.matrix(dbscan_mat[,3]) , eps = eps_dis, minPts = 1)
+
+df_temp1 <- as.data.frame(dbscan_cluster$cluster)  %>% 
+               rownames_to_column(var = "RowID")
+
+
+DBSCAN_DF <-   left_join(dbscan_mat,df_temp1, by="RowID" )
+
+freq_member <-   as.data.frame(table(dbscan_cluster$cluster)) %>% 
+                 arrange(desc(Freq)) %>% rename(dbscan_cid=Var1) %>%
+                 mutate(
+                   shape_cid=2,
+                   
+                   OutlierFlag=
+                   case_when(dbscan_cid != 1 ~ "Yes",
+                             TRUE ~ "No"), 
+                   dbscan_cid=as.integer(dbscan_cid)
+                   
+                   )
+
+f_data <-    left_join(DBSCAN_DF, freq_member, by=c("dbscan_cluster$cluster"="dbscan_cid")) %>%
+             dplyr::select(SequenceNo, OutlierFlag)
+
+return(f_data)
+  
+}
+
+shape_CID_1_outlier <-   udf_func_dbscan(full_data, 1, 0.01)
+shape_CID_2_outlier <-  udf_func_dbscan(full_data, 2, 0.01)
+
+outlier_tag_all <-  rbind(shape_CID_1_outlier,shape_CID_2_outlier)
+
+
+final_full_data <- left_join(full_data, outlier_tag_all, by=c("SequenceNo"))
+
+write.csv(final_full_data, paste0(PM_Name_file,"_block_", j, "_shape_2c.csv"), row.names = F)
+
+
+}
+```
+
+
