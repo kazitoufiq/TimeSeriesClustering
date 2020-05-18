@@ -1,1 +1,1 @@
-# TimeSeriesClustering
+# Time Series Clustering
