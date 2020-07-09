@@ -8,7 +8,7 @@ Every point machine's swing, either Normal to Reverse or Reverse to Normal, is a
 
 ## Demo
 
-[![](https://github.com/kazitoufiq/TimeSeriesClustering/blob/master/Demo_Outlier%20Detection.png)]
+![](https://github.com/kazitoufiq/TimeSeriesClustering/blob/master/Demo_Outlier%20Detection.png)
 
 ## Overview
 
