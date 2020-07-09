@@ -15,7 +15,7 @@ Every point machine's swing, either Normal to Reverse or Reverse to Normal, is a
 
 ## Motivation
 
-I  developed this model is to detect regular and irregular motor current profiles of point machines. Every point machine's swing, either Normal to Reverse or Reverse to Normal, is associated with motor current profile. The current value for every 10ms is captured by condition monitoring system. On an average, a swing has ~500 current values with 10ms interval. Hence, each swing can be considered as time sequence/time series. Using unsupervised machine learning, I've tried to detect regular and irregular motor current profiles of point machines.
+I  developed this model to detect regular and irregular motor current profiles of point machines. Every point machine's swing, either Normal to Reverse or Reverse to Normal, is associated with motor current profile. The current value for every 10ms is captured by condition monitoring system. On an average, a swing has ~500 current values with 10ms interval. Hence, each swing can be considered as time sequence/time series. Using unsupervised machine learning, I've tried to detect regular and irregular motor current profiles of point machines.
 
 I was approached by one of my colleagues to help him to efficiently detect sub-optimal performance of point machines using the condition monitoring data. My colleague was spending a lot of time in observing current profiles and then defining threshold to detect abnormalities based on historical data while creating rules. The challenge was the current profiles vary not only from machine type(model) to machine type but also from machine to machine of same type(model) and there are around 1100 point machines in the network. 
 
